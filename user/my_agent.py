@@ -31,47 +31,83 @@ class SubmittedAgent(Agent):
     Input the **file_path** to your agent here for submission!
     '''
     def __init__(
-        self,
-        file_path: Optional[str] = None,
+            self,
+            *args,
+            **kwargs
     ):
-        super().__init__(file_path)
-
-        # To run a TTNN model, you must maintain a pointer to the device and can be done by 
-        # uncommmenting the line below to use the device pointer
-        # self.mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,1))
-
-    def _initialize(self) -> None:
-        if self.file_path is None:
-            self.model = PPO("MlpPolicy", self.env, verbose=0)
-            del self.env
-        else:
-            self.model = PPO.load(self.file_path)
-
-        # To run the sample TTNN model during inference, you can uncomment the 5 lines below:
-        # This assumes that your self.model.policy has the MLPPolicy architecture defined in `train_agent.py` or `my_agent_tt.py`
-        # mlp_state_dict = self.model.policy.features_extractor.model.state_dict()
-        # self.tt_model = TTMLPPolicy(mlp_state_dict, self.mesh_device)
-        # self.model.policy.features_extractor.model = self.tt_model
-        # self.model.policy.vf_features_extractor.model = self.tt_model
-        # self.model.policy.pi_features_extractor.model = self.tt_model
-
-    def _gdown(self) -> str:
-        data_path = "rl-model.zip"
-        if not os.path.isfile(data_path):
-            print(f"Downloading {data_path}...")
-            # Place a link to your PUBLIC model data here. This is where we will download it from on the tournament server.
-            url = "https://drive.google.com/file/d/1JIokiBOrOClh8piclbMlpEEs6mj3H1HJ/view?usp=sharing"
-            gdown.download(url, output=data_path, fuzzy=True)
-        return data_path
+        super().__init__(*args, **kwargs)
+        self.time = 0
 
     def predict(self, obs):
-        action, _ = self.model.predict(obs)
+        self.time += 1
+        pos = self.obs_helper.get_section(obs, 'player_pos')
+        opp_pos = self.obs_helper.get_section(obs, 'opponent_pos')
+        opp_KO = self.obs_helper.get_section(obs, 'opponent_state') in [5, 11]
+        action = self.act_helper.zeros()
+
+        # If off the edge, come back
+        if pos[0] > 10.67/2:
+            action = self.act_helper.press_keys(['a'])
+        elif pos[0] < -10.67/2:
+            action = self.act_helper.press_keys(['d'])
+        elif not opp_KO:
+            # Head toward opponent
+            if (opp_pos[0] > pos[0]):
+                action = self.act_helper.press_keys(['d'])
+            else:
+                action = self.act_helper.press_keys(['a'])
+
+        # Note: Passing in partial action
+        # Jump if below map or opponent is above you
+        if (pos[1] > 1.6 or pos[1] > opp_pos[1]) and self.time % 2 == 0:
+            action = self.act_helper.press_keys(['space'], action)
+
+        # Attack if near
+        if (pos[0] - opp_pos[0])**2 + (pos[1] - opp_pos[1])**2 < 4.0:
+            action = self.act_helper.press_keys(['j'], action)
         return action
+    # def __init__(
+    #     self,
+    #     file_path: Optional[str] = None,
+    # ):
+    #     super().__init__(file_path)
 
-    def save(self, file_path: str) -> None:
-        self.model.save(file_path)
+    #     # To run a TTNN model, you must maintain a pointer to the device and can be done by 
+    #     # uncommmenting the line below to use the device pointer
+    #     # self.mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,1))
 
-    # If modifying the number of models (or training in general), modify this
-    def learn(self, env, total_timesteps, log_interval: int = 4):
-        self.model.set_env(env)
-        self.model.learn(total_timesteps=total_timesteps, log_interval=log_interval)
+    # def _initialize(self) -> None:
+    #     if self.file_path is None:
+    #         self.model = PPO("MlpPolicy", self.env, verbose=0)
+    #         del self.env
+    #     else:
+    #         self.model = PPO.load(self.file_path)
+
+    #     # To run the sample TTNN model during inference, you can uncomment the 5 lines below:
+    #     # This assumes that your self.model.policy has the MLPPolicy architecture defined in `train_agent.py` or `my_agent_tt.py`
+    #     # mlp_state_dict = self.model.policy.features_extractor.model.state_dict()
+    #     # self.tt_model = TTMLPPolicy(mlp_state_dict, self.mesh_device)
+    #     # self.model.policy.features_extractor.model = self.tt_model
+    #     # self.model.policy.vf_features_extractor.model = self.tt_model
+    #     # self.model.policy.pi_features_extractor.model = self.tt_model
+
+    # def _gdown(self) -> str:
+    #     data_path = "rl-model.zip"
+    #     if not os.path.isfile(data_path):
+    #         print(f"Downloading {data_path}...")
+    #         # Place a link to your PUBLIC model data here. This is where we will download it from on the tournament server.
+    #         url = "https://drive.google.com/file/d/1JIokiBOrOClh8piclbMlpEEs6mj3H1HJ/view?usp=sharing"
+    #         gdown.download(url, output=data_path, fuzzy=True)
+    #     return data_path
+
+    # def predict(self, obs):
+    #     action, _ = self.model.predict(obs)
+    #     return action
+
+    # def save(self, file_path: str) -> None:
+    #     self.model.save(file_path)
+
+    # # If modifying the number of models (or training in general), modify this
+    # def learn(self, env, total_timesteps, log_interval: int = 4):
+    #     self.model.set_env(env)
+    #     self.model.learn(total_timesteps=total_timesteps, log_interval=log_interval)
