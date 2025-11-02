@@ -26,8 +26,8 @@ from sb3_contrib import RecurrentPPO # Importing an LSTM
 # from user.my_agent_tt import TTMLPPolicy
 
 
-class SubmittedAgent(Agent):
-    def __init__(
+class SubmittedAgent(Agent): #13
+      def __init__(
             self,
             *args,
             **kwargs
@@ -48,13 +48,14 @@ class SubmittedAgent(Agent):
 
         #More vars
         state = self.obs_helper.get_section(obs, 'player_state')
+        jumps_left = self.obs_helper.get_section(obs, 'player_jumps_left')
         opp_state = self.obs_helper.get_section(obs, 'opponent_state')
         opp_vel = self.obs_helper.get_section(obs, 'opponent_vel')
         damage = self.obs_helper.get_section(obs, 'player_damage')
         opp_damage = self.obs_helper.get_section(obs, 'opponent_damage')
         dist_from_opp = abs((pos[0] - opp_pos[0])**2 + (pos[1] - opp_pos[1])**2)**0.5
         weapon = self.obs_helper.get_section(obs, 'player_weapon_type') #[0] no weapon, [1] spear, [2] hammer
-        keep_distance = 1 #1.8 if weapon[0] == 0 else 2
+        keep_distance = 1.7 if weapon[0] == 0 else 2
         safe_area = 2 if opp_pos[0] > 6.5 or opp_pos[0] < -6.5 else 1.5
         spawner1 = self.obs_helper.get_section(obs, 'player_spawner_1') #[x, y, z] x y is position
         spawner2 = self.obs_helper.get_section(obs, 'player_spawner_2') #[x, y, z] x y is position
@@ -87,7 +88,7 @@ class SubmittedAgent(Agent):
         #states
         at_g1 = ( -7 < pos[0] < -2 ) and (pos[1] > 2)
         at_g2 = ( 2 < pos[0] < 7 ) and (pos[1] > 0)
-        opp_at_g1 = ( -7 < opp_pos[0] < -2 ) and (opp_pos[1] > 2)
+        opp_at_g1 = ( -7 < opp_pos[0] < -1 ) and (opp_pos[1] > 2)
         opp_at_g2 = ( 2 < opp_pos[0] < 7 ) and (opp_pos[1] > 0)
         on_ground = self.obs_helper.get_section(obs, 'player_grounded')[0] == 1
         opp_on_ground = self.obs_helper.get_section(obs, 'opponent_grounded')[0] == 1
@@ -97,6 +98,7 @@ class SubmittedAgent(Agent):
         not_facing_oppL = (pos[0] < opp_pos[0] and self.obs_helper.get_section(obs, 'player_facing')[0] == 0)
         opp_attack = self.obs_helper.get_section(obs, 'opponent_move_type')[0] != 0
         opp_heavy_attack = self.obs_helper.get_section(obs, 'opponent_move_type')[0] == 5
+        middle_zone = pos[1] > 4 and 0 < pos[0] < 2 or pos[1] > 3 and -2 < pos[0] < 0
 
         #Store starting pos
         if self.start_pos is None:
@@ -114,9 +116,16 @@ class SubmittedAgent(Agent):
             elif opp_at_g2 and not opp_KO and self.time % 201 == 0:
                 self.target_pos = [4, 0.85]
 
-        print(safe_area)
+        print(middle_zone)
 
-        if not opp_KO:
+        if middle_zone:
+            action = self.act_helper.press_keys(['a'])
+            # if pos[1] > 3.3 and self.time % 8 == 0:
+            #     action = self.act_helper.press_keys(['space'], action)
+            if pos[0] < 1 and self.time % 2 == 0:
+                action = self.act_helper.press_keys(['space'], action)
+
+        elif not opp_KO:
             #If off the edge then come back
             if pos[0] > self.target_pos[0] + safe_area: #If not at opponent's ground
                 action = self.act_helper.press_keys(['a'])
@@ -124,12 +133,15 @@ class SubmittedAgent(Agent):
                 action = self.act_helper.press_keys(['d'])
 
             
-            elif dist_from_opp < 4 and pos[1] + 2 > opp_pos[1] :
+            elif dist_from_opp < 5 and pos[1] + 2 > opp_pos[1] :
                 # Head toward opponent
                 if opp_pos[0] - pos[0] > keep_distance or not_facing_oppL:
                     action = self.act_helper.press_keys(['d'])
                 elif pos[0] - opp_pos[0] > keep_distance or not_facing_oppR:
                     action = self.act_helper.press_keys(['a'])
+                if pos[1] > opp_pos[1] and pos[1] > -4 and self.time%2 == 0:
+                    action = self.act_helper.press_keys(['k'], action)
+                    action = self.act_helper.press_keys(['space'], action)
 
                 #Attack
                 # self.target_pos[0] - 1.5 < pos[0] < self.target_pos[0] + 1.5 and
@@ -138,18 +150,19 @@ class SubmittedAgent(Agent):
                 else:
                     action = self.act_helper.press_keys(['j'], action)
 
-                if dist_from_opp < 2.5 and not is_dodging: #TIS IS WORKING DO NOT TOUCH
+                if opp_attack and not is_dodging: #TIS IS WORKING DO NOT TOUCH
                     action = self.act_helper.press_keys(['l'], action)
 
             #Jump
-            if (pos[1] > self.target_pos[1]+1 or \
-                pos[0] < self.target_pos[0] - 3 or \
-                pos[0] > self.target_pos[0] + 3 #2.5 and 3 is working
-                ) and self.time %2 == 0:
+            if (pos[1] > self.target_pos[1]+0.7 or \
+                pos[0] < self.target_pos[0] - 2.6 or \
+                pos[0] > self.target_pos[0] + 2.6 #2.5 and 3 is working
+                ) and self.time %10 == 0:
                 action = self.act_helper.press_keys(['space'], action)
             if opp_heavy_attack:
                 action = self.act_helper.press_keys(['space'], action)
-            if pos[1] > 3.8 and self.time % 8 == 0:
+
+            if pos[1] > self.target_pos[1] + 1 and self.time %4 == 0:
                 action = self.act_helper.press_keys(['space'], action)
 
         elif opp_KO:
