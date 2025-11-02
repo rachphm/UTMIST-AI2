@@ -27,9 +27,6 @@ from sb3_contrib import RecurrentPPO # Importing an LSTM
 
 
 class SubmittedAgent(Agent):
-    '''
-    Input the **file_path** to your agent here for submission!
-    '''
     def __init__(
             self,
             *args,
@@ -37,6 +34,10 @@ class SubmittedAgent(Agent):
     ):
         super().__init__(*args, **kwargs)
         self.time = 0
+        self.start_pos = None
+        self.opp_start_pos = None
+        self.target_pos = None
+        self.prev_opp_pos = None
 
     def predict(self, obs):
         self.time += 1
@@ -45,69 +46,134 @@ class SubmittedAgent(Agent):
         opp_KO = self.obs_helper.get_section(obs, 'opponent_state') in [5, 11]
         action = self.act_helper.zeros()
 
-        # If off the edge, come back
-        if pos[0] > 10.67/2:
-            action = self.act_helper.press_keys(['a'])
-        elif pos[0] < -10.67/2:
-            action = self.act_helper.press_keys(['d'])
-        elif not opp_KO:
-            # Head toward opponent
-            if (opp_pos[0] > pos[0]):
-                action = self.act_helper.press_keys(['d'])
-            else:
+        #More vars
+        state = self.obs_helper.get_section(obs, 'player_state')
+        opp_state = self.obs_helper.get_section(obs, 'opponent_state')
+        opp_vel = self.obs_helper.get_section(obs, 'opponent_vel')
+        damage = self.obs_helper.get_section(obs, 'player_damage')
+        opp_damage = self.obs_helper.get_section(obs, 'opponent_damage')
+        dist_from_opp = abs((pos[0] - opp_pos[0])**2 + (pos[1] - opp_pos[1])**2)**0.5
+        weapon = self.obs_helper.get_section(obs, 'player_weapon_type') #[0] no weapon, [1] spear, [2] hammer
+        keep_distance = 1 #1.8 if weapon[0] == 0 else 2
+        safe_area = 2 if opp_pos[0] > 6.5 or opp_pos[0] < -6.5 else 1.5
+        spawner1 = self.obs_helper.get_section(obs, 'player_spawner_1') #[x, y, z] x y is position
+        spawner2 = self.obs_helper.get_section(obs, 'player_spawner_2') #[x, y, z] x y is position
+        spawner3 = self.obs_helper.get_section(obs, 'player_spawner_3')
+        spawner4 = self.obs_helper.get_section(obs, 'player_spawner_4')
+        spawners = [spawner1, spawner2, spawner3, spawner4]
+
+        valid_spawners = []
+        for s in spawners:
+            if s[0] != 0:
+                dist = abs(s[0] - pos[0])
+                valid_spawners.append((dist, s))
+
+        if valid_spawners:
+            # pick the closest one
+            valid_spawners.sort(key=lambda x: x[0])
+            spawner = valid_spawners[0][1]
+        else:
+            spawner = [20, 0, 0]
+
+        approaching = False
+        if self.prev_opp_pos is not None:
+            prev_dist = abs(self.prev_opp_pos[0] - pos[0])
+            curr_dist = abs(opp_pos[0] - pos[0])
+
+            # approaching if getting closer
+            approaching = curr_dist < prev_dist - 0.05
+        self.prev_opp_pos = opp_pos.copy()
+
+        #states
+        at_g1 = ( -7 < pos[0] < -2 ) and (pos[1] > 2)
+        at_g2 = ( 2 < pos[0] < 7 ) and (pos[1] > 0)
+        opp_at_g1 = ( -7 < opp_pos[0] < -2 ) and (opp_pos[1] > 2)
+        opp_at_g2 = ( 2 < opp_pos[0] < 7 ) and (opp_pos[1] > 0)
+        on_ground = self.obs_helper.get_section(obs, 'player_grounded')[0] == 1
+        opp_on_ground = self.obs_helper.get_section(obs, 'opponent_grounded')[0] == 1
+        opp_overhead = pos[1] - opp_pos[1] > 2.5 and abs(pos[0] - opp_pos[0]) < 1.5
+        is_dodging = self.obs_helper.get_section(obs, 'player_dodge_timer')[0] != 0
+        not_facing_oppR = (pos[0] > opp_pos[0] and self.obs_helper.get_section(obs, 'player_facing')[0] == 1)
+        not_facing_oppL = (pos[0] < opp_pos[0] and self.obs_helper.get_section(obs, 'player_facing')[0] == 0)
+        opp_attack = self.obs_helper.get_section(obs, 'opponent_move_type')[0] != 0
+        opp_heavy_attack = self.obs_helper.get_section(obs, 'opponent_move_type')[0] == 5
+
+        #Store starting pos
+        if self.start_pos is None:
+            self.start_pos = pos.copy() 
+            print(f"Starting position recorded: {self.start_pos}")
+        if self.opp_start_pos is None:
+            self.opp_start_pos = opp_pos.copy() 
+            print(f"Opponent starting position recorded: {self.opp_start_pos}")
+        if self.target_pos is None:
+            self.target_pos = [4, 0.85]
+        
+        if damage >= opp_damage:
+            if opp_at_g1 and not opp_KO and self.time % 201 == 0:
+                self.target_pos = [-4, 2.85] 
+            elif opp_at_g2 and not opp_KO and self.time % 201 == 0:
+                self.target_pos = [4, 0.85]
+
+        print(safe_area)
+
+        if not opp_KO:
+            #If off the edge then come back
+            if pos[0] > self.target_pos[0] + safe_area: #If not at opponent's ground
                 action = self.act_helper.press_keys(['a'])
+            elif pos[0] < self.target_pos[0] - safe_area: #If not at opponent's ground
+                action = self.act_helper.press_keys(['d'])
 
-        # Note: Passing in partial action
-        # Jump if below map or opponent is above you
-        if (pos[1] > 1.6 or pos[1] > opp_pos[1]) and self.time % 2 == 0:
-            action = self.act_helper.press_keys(['space'], action)
+            
+            elif dist_from_opp < 4 and pos[1] + 2 > opp_pos[1] :
+                # Head toward opponent
+                if opp_pos[0] - pos[0] > keep_distance or not_facing_oppL:
+                    action = self.act_helper.press_keys(['d'])
+                elif pos[0] - opp_pos[0] > keep_distance or not_facing_oppR:
+                    action = self.act_helper.press_keys(['a'])
 
-        # Attack if near
-        if (pos[0] - opp_pos[0])**2 + (pos[1] - opp_pos[1])**2 < 4.0:
-            action = self.act_helper.press_keys(['j'], action)
+                #Attack
+                # self.target_pos[0] - 1.5 < pos[0] < self.target_pos[0] + 1.5 and
+                if (dist_from_opp > 3 and approaching) and self.time%2 == 0:                    
+                    action = self.act_helper.press_keys(['k'], action)
+                else:
+                    action = self.act_helper.press_keys(['j'], action)
+
+                if dist_from_opp < 2.5 and not is_dodging: #TIS IS WORKING DO NOT TOUCH
+                    action = self.act_helper.press_keys(['l'], action)
+
+            #Jump
+            if (pos[1] > self.target_pos[1]+1 or \
+                pos[0] < self.target_pos[0] - 3 or \
+                pos[0] > self.target_pos[0] + 3 #2.5 and 3 is working
+                ) and self.time %2 == 0:
+                action = self.act_helper.press_keys(['space'], action)
+            if opp_heavy_attack:
+                action = self.act_helper.press_keys(['space'], action)
+            if pos[1] > 3.8 and self.time % 8 == 0:
+                action = self.act_helper.press_keys(['space'], action)
+
+        elif opp_KO:
+            if weapon[0] != 2 and spawner[0] != 20:
+                if (spawner[0] > pos[0]):
+                    action = self.act_helper.press_keys(['d'])
+                elif (spawner[0] < pos[0]):
+                    action = self.act_helper.press_keys(['a'])
+            else:
+                if pos[0] > self.target_pos[0] + safe_area: #If not at opponent's ground
+                    action = self.act_helper.press_keys(['a'])
+                elif pos[0] < self.target_pos[0] - safe_area: #If not at opponent's ground
+                    action = self.act_helper.press_keys(['d'])
+
+            if -3 < pos[0] < -1 and self.time % 2 == 0:
+                action = self.act_helper.press_keys(['space'], action)
+
+        # Pick up weapon if near
+        if weapon[0] != 2 and abs(spawner[0] - pos[0]) < 1:
+            action = self.act_helper.press_keys(['h'], action)
+
+   
+        #Speed fall if safe
+        if (3 < pos[0] < 5 or -5 < pos[0] < -3) and not on_ground:
+            action = self.act_helper.press_keys(['s'], action)
+
         return action
-    # def __init__(
-    #     self,
-    #     file_path: Optional[str] = None,
-    # ):
-    #     super().__init__(file_path)
-
-    #     # To run a TTNN model, you must maintain a pointer to the device and can be done by 
-    #     # uncommmenting the line below to use the device pointer
-    #     # self.mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,1))
-
-    # def _initialize(self) -> None:
-    #     if self.file_path is None:
-    #         self.model = PPO("MlpPolicy", self.env, verbose=0)
-    #         del self.env
-    #     else:
-    #         self.model = PPO.load(self.file_path)
-
-    #     # To run the sample TTNN model during inference, you can uncomment the 5 lines below:
-    #     # This assumes that your self.model.policy has the MLPPolicy architecture defined in `train_agent.py` or `my_agent_tt.py`
-    #     # mlp_state_dict = self.model.policy.features_extractor.model.state_dict()
-    #     # self.tt_model = TTMLPPolicy(mlp_state_dict, self.mesh_device)
-    #     # self.model.policy.features_extractor.model = self.tt_model
-    #     # self.model.policy.vf_features_extractor.model = self.tt_model
-    #     # self.model.policy.pi_features_extractor.model = self.tt_model
-
-    # def _gdown(self) -> str:
-    #     data_path = "rl-model.zip"
-    #     if not os.path.isfile(data_path):
-    #         print(f"Downloading {data_path}...")
-    #         # Place a link to your PUBLIC model data here. This is where we will download it from on the tournament server.
-    #         url = "https://drive.google.com/file/d/1JIokiBOrOClh8piclbMlpEEs6mj3H1HJ/view?usp=sharing"
-    #         gdown.download(url, output=data_path, fuzzy=True)
-    #     return data_path
-
-    # def predict(self, obs):
-    #     action, _ = self.model.predict(obs)
-    #     return action
-
-    # def save(self, file_path: str) -> None:
-    #     self.model.save(file_path)
-
-    # # If modifying the number of models (or training in general), modify this
-    # def learn(self, env, total_timesteps, log_interval: int = 4):
-    #     self.model.set_env(env)
-    #     self.model.learn(total_timesteps=total_timesteps, log_interval=log_interval)
